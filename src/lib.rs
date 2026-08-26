@@ -122,6 +122,16 @@ async fn read_bitable(
         .map_err(|_| ApiError::internal("服务状态不可用"))?;
     let key = CacheKey::new(app_token, table_id);
 
+    state
+        .cache
+        .ensure_subscription(&key.app_token, &key.table_id, || {
+            let reader = state.reader.clone();
+            let app_token = key.app_token.clone();
+            async move { reader.ensure_bitable_subscription(&app_token).await }
+        })
+        .await
+        .map_err(ApiError::Upstream)?;
+
     let records = if let Some(value) = state.cache.get(&key).await {
         value
     } else {

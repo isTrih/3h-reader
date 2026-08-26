@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 
@@ -21,6 +24,8 @@ impl CacheKey {
 pub struct BitableCache {
     values: RwLock<HashMap<CacheKey, Arc<serde_json::Value>>>,
     key_locks: Mutex<HashMap<CacheKey, Arc<Mutex<()>>>>,
+    subscriptions: RwLock<HashMap<String, HashSet<String>>>,
+    subscription_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     invalidation_barrier: RwLock<()>,
 }
 
@@ -41,6 +46,64 @@ impl BitableCache {
             .entry(key.clone())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
+    }
+
+    pub async fn ensure_subscription<F, Fut>(
+        &self,
+        app_token: &str,
+        table_id: &str,
+        subscribe: F,
+    ) -> Result<(), String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<(), String>>,
+    {
+        if self
+            .subscriptions
+            .read()
+            .await
+            .get(app_token)
+            .is_some_and(|tables| tables.contains(table_id))
+        {
+            return Ok(());
+        }
+
+        let key_lock = {
+            let mut locks = self.subscription_locks.lock().await;
+            locks
+                .entry(app_token.to_owned())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _guard = key_lock.lock().await;
+        if self.subscriptions.read().await.contains_key(app_token) {
+            self.subscriptions
+                .write()
+                .await
+                .entry(app_token.to_owned())
+                .or_default()
+                .insert(table_id.to_owned());
+            return Ok(());
+        }
+
+        subscribe().await?;
+        self.subscriptions
+            .write()
+            .await
+            .entry(app_token.to_owned())
+            .or_default()
+            .insert(table_id.to_owned());
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn subscription_tables(&self, app_token: &str) -> HashSet<String> {
+        self.subscriptions
+            .read()
+            .await
+            .get(app_token)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// 首次装载与缓存写入期间持有读屏障，保证失效操作不会被旧请求越过。
@@ -142,5 +205,23 @@ mod tests {
         drop(transaction);
         assert_eq!(invalidator.await.expect("invalidation task"), 1);
         assert!(cache.is_empty().await);
+    }
+
+    #[tokio::test]
+    async fn subscribes_each_bitable_once_and_tracks_tables() {
+        let cache = BitableCache::default();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        for table in ["table-1", "table-2", "table-1"] {
+            let calls = calls.clone();
+            cache
+                .ensure_subscription("base-1", table, move || async move {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(())
+                })
+                .await
+                .expect("subscription");
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(cache.subscription_tables("base-1").await.len(), 2);
     }
 }
