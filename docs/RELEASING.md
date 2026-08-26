@@ -1,6 +1,6 @@
 # 发版与 Docker 镜像发布流程
 
-本项目通过 GitHub Release 自动构建并发布 Docker 镜像到 GitHub Container Registry（GHCR）。工作流文件为 `.github/workflows/publish-docker.yml`。
+本项目通过 GitHub Release 自动构建并发布 Docker 镜像到 Docker Hub。工作流文件为 `.github/workflows/publish-docker.yml`。
 
 ## 发布约定
 
@@ -81,39 +81,46 @@ git push origin v0.2.0
 
 ## 四、自动发布内容
 
-假设仓库为 `Example/OpenLark-Bitable-Service`，发布 `v0.2.0` 后，镜像名会转为小写：
+假设 GitHub 仓库名为 `openlark-bitable-service`，发布 `v0.2.0` 后，镜像会推送到 Docker Hub 用户 `trihlp`：
 
 ```text
-ghcr.io/example/openlark-bitable-service:0.2.0
-ghcr.io/example/openlark-bitable-service:0.2
-ghcr.io/example/openlark-bitable-service:latest
-ghcr.io/example/openlark-bitable-service:sha-<短提交号>
+trihlp/openlark-bitable-service:0.2.0
+trihlp/openlark-bitable-service:0.2
+trihlp/openlark-bitable-service:latest
+trihlp/openlark-bitable-service:sha-<短提交号>
 ```
 
-主版本为 `0` 时不会发布含义过宽的 `:0` 标签；从 `v1.0.0` 开始会额外发布 `:1` 这样的主版本标签。工作流同时发布 `linux/amd64` 和 `linux/arm64`，并向 GHCR 写入构建来源证明。候选版本只发布完整 SemVer 与 commit 标签，不更新 `latest`。
+主版本为 `0` 时不会发布含义过宽的 `:0` 标签；从 `v1.0.0` 开始会额外发布 `:1` 这样的主版本标签。工作流同时发布 `linux/amd64` 和 `linux/arm64`。候选版本只发布完整 SemVer 与 commit 标签，不更新 `latest`。
 
-## 五、权限和可见性
+## 五、Docker Hub 准备
 
-工作流使用 GitHub 自动提供的 `GITHUB_TOKEN` 登录 GHCR，不需要创建 Docker 密码或额外仓库 secret。工作流只授予：
+在 Docker Hub 中完成以下准备：
 
-- `contents: read`：读取 Release 对应的源码；
-- `packages: write`：推送 GHCR 镜像；
-- `attestations: write` 和 `id-token: write`：生成镜像来源证明。
+1. 在 Docker Hub 创建与 GitHub 仓库同名的 repository，例如 `openlark-bitable-service`。
+2. 创建一个具有该 repository 写入权限的 Docker Hub Access Token。
+3. 在 GitHub 仓库 **Settings → Secrets and variables → Actions** 中创建 Repository secret：
 
-首次发布后，可以在仓库或组织的 Packages 页面调整容器包可见性。若组织策略禁止 GitHub Actions 写入 package，需要由组织管理员允许该仓库写入 GHCR。
+   ```text
+   Name: DH_TOKEN
+   Secret: <Docker Hub Access Token>
+   ```
+
+工作流固定使用 `trihlp` 作为 Docker Hub 用户名，并使用当前 GitHub 仓库名的小写形式作为 Docker Hub repository 名。Docker Hub repository 的公开或私有状态由 Docker Hub 中的 repository 设置决定。
+
+工作流的 `GITHUB_TOKEN` 只具有 `contents: read` 权限，用于读取 Release 对应源码；镜像推送只使用 `DH_TOKEN`。
 
 ## 六、拉取和运行镜像
 
 公开镜像可以直接拉取：
 
 ```bash
-docker pull ghcr.io/<owner>/<repository>:0.2.0
+docker pull trihlp/<repository>:0.2.0
 ```
 
-私有镜像需要先用具备 `read:packages` 权限的 GitHub token 登录：
+私有镜像需要先用 Docker Hub Access Token 登录：
 
 ```bash
-echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-user> --password-stdin
+echo "$DH_TOKEN" | docker login -u trihlp --password-stdin
 ```
 
 运行时再注入业务凭据，不要把 `.env` 或任何密钥构建到镜像中：
@@ -123,7 +130,7 @@ docker run --rm \
   --name openlark-bitable-service \
   --env-file .env \
   -p 8080:8080 \
-  ghcr.io/<owner>/<repository>:0.2.0
+  trihlp/<repository>:0.2.0
 ```
 
 验证服务：
@@ -137,7 +144,8 @@ curl http://127.0.0.1:8080/health
 在 GitHub 仓库的 **Actions → Publish Docker image** 中查看日志：
 
 - **版本不一致**：修正 `Cargo.toml`，提交后使用新的版本号重新发版；不要覆盖已发布 tag。
-- **Package write permission denied**：检查仓库 Actions 权限和组织 package 策略。
+- **Docker Hub 登录失败**：确认 GitHub Actions Secret 名称为 `DH_TOKEN`，并检查 token 是否仍有效。
+- **Docker Hub push denied**：确认 `DOCKERHUB_USERNAME` 正确、目标 repository 已创建，并且 `DH_TOKEN` 具有写入权限。
 - **Docker 构建失败**：先在本地运行 `docker build -t openlark-bitable-service:test .`。
 - **某个平台构建失败**：查看 Buildx/QEMU 日志，确认依赖能在 `amd64` 与 `arm64` 上构建。
 - **需要重试瞬时错误**：在失败的工作流页面选择 **Re-run failed jobs**；它仍然使用同一个 Release tag commit。

@@ -67,4 +67,4 @@ cargo clippy --all-targets -- -D warnings
 
 ## 发版
 
-发布 GitHub Release 后，GitHub Actions 会从该 Release tag 指向的 commit 构建 `linux/amd64`、`linux/arm64` 镜像并推送到 GHCR。完整步骤见 [`docs/RELEASING.md`](docs/RELEASING.md)。
+发布 GitHub Release 后，GitHub Actions 会从该 Release tag 指向的 commit 构建 `linux/amd64`、`linux/arm64` 镜像，并使用仓库 Secret `DH_TOKEN` 推送到 Docker Hub 用户 `trihlp`。完整步骤见 [`docs/RELEASING.md`](docs/RELEASING.md)。
