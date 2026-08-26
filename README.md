@@ -50,7 +50,7 @@ curl "http://127.0.0.1:8080/bitable/US52wnvfniIRC0kAiyVcaltLnrh?table=tblQH0TVkK
 ## 缓存与飞书事件
 
 - 缓存键为 `(bitable app_token, table_id)`，无 TTL；同一表首次并发读取会通过逐键锁合并为一次飞书 API 请求。
-- 每个 bitable 的首次请求会先通过 OpenLark 查询云文档事件订阅状态；未订阅时调用订阅接口，成功后在内存订阅管理表中登记该 bitable 及其 table。服务运行期间同一 bitable 不会重复调用订阅接口。
+- 每个 bitable 的首次请求会先通过 OpenLark 查询云文档事件订阅状态；未订阅时调用订阅接口，随后在内存订阅管理表中登记该 bitable 及其 table。订阅检查失败只记录告警，不阻断多维表格读取；服务运行期间同一 bitable 不会重复调用订阅接口。
 - 服务通过 OpenLark WebSocket 接收 `drive.file.bitable_record_changed_v1`。
 - 从收到首个记录变更开始收集受影响的 bitable/table；每次新事件都会重新计算静默窗口。
 - 连续 120 秒没有新变更后，批量清除一次相关缓存。若事件载荷无法解析或缺少 bitable token，为避免返回陈旧数据会安全地清空全部缓存。

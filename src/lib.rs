@@ -122,7 +122,7 @@ async fn read_bitable(
         .map_err(|_| ApiError::internal("服务状态不可用"))?;
     let key = CacheKey::new(app_token, table_id);
 
-    state
+    if let Err(error) = state
         .cache
         .ensure_subscription(&key.app_token, &key.table_id, || {
             let reader = state.reader.clone();
@@ -130,7 +130,15 @@ async fn read_bitable(
             async move { reader.ensure_bitable_subscription(&app_token).await }
         })
         .await
-        .map_err(ApiError::Upstream)?;
+    {
+        // 订阅权限/文档身份与读取权限可能不同；订阅失败不应阻断已有的读取能力。
+        tracing::warn!(
+            app_token = %key.app_token,
+            table_id = %key.table_id,
+            error = %error,
+            "飞书事件订阅检查失败，将继续读取多维表格"
+        );
+    }
 
     let records = if let Some(value) = state.cache.get(&key).await {
         value

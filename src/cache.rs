@@ -86,14 +86,13 @@ impl BitableCache {
             return Ok(());
         }
 
-        subscribe().await?;
         self.subscriptions
             .write()
             .await
             .entry(app_token.to_owned())
             .or_default()
             .insert(table_id.to_owned());
-        Ok(())
+        subscribe().await
     }
 
     #[cfg(test)]
@@ -223,5 +222,22 @@ mod tests {
         }
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(cache.subscription_tables("base-1").await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn records_failed_subscription_attempt_without_blocking_future_reads() {
+        let cache = BitableCache::default();
+        let result = cache
+            .ensure_subscription("base-1", "table-1", || async {
+                Err("API错误 1069604 response: document not found".to_owned())
+            })
+            .await;
+        assert!(result.is_err());
+        assert!(
+            cache
+                .subscription_tables("base-1")
+                .await
+                .contains("table-1")
+        );
     }
 }
