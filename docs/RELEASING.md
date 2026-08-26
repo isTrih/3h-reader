@@ -107,6 +107,8 @@ trihlp/openlark-bitable-service:sha-<短提交号>
 
 工作流固定使用 `trihlp` 作为 Docker Hub 用户名，并使用当前 GitHub 仓库名的小写形式作为 Docker Hub repository 名。Docker Hub repository 的公开或私有状态由 Docker Hub 中的 repository 设置决定。
 
+工作流使用 GitHub Actions Cache 的 BuildKit 缓存（`scope=3h-reader`），并在 Dockerfile 中缓存 Cargo registry、Git 依赖和按目标平台隔离的 `target` 目录。Dockerfile 还会先单独编译依赖，再编译应用源码；因此 Cargo.lock 未变化时，后续发版通常只需重新编译本项目代码。首次构建或依赖升级仍可能较慢，多架构构建会分别维护 `amd64` 和 `arm64` 的 target 缓存。
+
 工作流的 `GITHUB_TOKEN` 只具有 `contents: read` 权限，用于读取 Release 对应源码；镜像推送只使用 `DH_TOKEN`。
 
 ## 六、拉取和运行镜像
