@@ -19,6 +19,7 @@ use lark::BitableReader;
 
 pub struct AppState {
     pub auth_token: String,
+    pub noencrypt_auth_token: String,
     pub encryptor: Encryptor,
     pub cache: Arc<BitableCache>,
     pub reader: Arc<dyn BitableReader>,
@@ -27,12 +28,14 @@ pub struct AppState {
 impl AppState {
     pub fn new(
         auth_token: String,
+        noencrypt_auth_token: String,
         encrypt_token: &str,
         cache: Arc<BitableCache>,
         reader: Arc<dyn BitableReader>,
     ) -> Self {
         Self {
             auth_token,
+            noencrypt_auth_token,
             encryptor: Encryptor::new(encrypt_token),
             cache,
             reader,
@@ -40,9 +43,17 @@ impl AppState {
     }
 }
 
+const RESPONSE_MODE_KEY: &str = "response_mode";
+
+#[derive(Clone, Copy)]
+enum ResponseMode {
+    Encrypted,
+    Plaintext,
+}
+
 #[derive(Serialize)]
-struct EncryptedResponse {
-    data: String,
+struct DataResponse {
+    data: serde_json::Value,
 }
 
 #[handler]
@@ -74,14 +85,27 @@ async fn require_auth(
         })
         .or_else(|| req.header::<String>("auth"));
 
-    let authorized = supplied
-        .as_deref()
-        .map(|value| constant_time_equal(value.as_bytes(), state.auth_token.as_bytes()))
-        .unwrap_or(false);
+    let mode = supplied.as_deref().and_then(|value| {
+        let encrypted = constant_time_equal(value.as_bytes(), state.auth_token.as_bytes());
+        let plaintext =
+            constant_time_equal(value.as_bytes(), state.noencrypt_auth_token.as_bytes());
+        if encrypted {
+            Some(ResponseMode::Encrypted)
+        } else if plaintext {
+            Some(ResponseMode::Plaintext)
+        } else {
+            None
+        }
+    });
 
-    if !authorized {
-        render_error(res, StatusCode::UNAUTHORIZED, "Unauthorized");
-        ctrl.skip_rest();
+    match mode {
+        Some(mode) => {
+            depot.insert(RESPONSE_MODE_KEY, mode);
+        }
+        None => {
+            render_error(res, StatusCode::UNAUTHORIZED, "Unauthorized");
+            ctrl.skip_rest();
+        }
     }
 }
 
@@ -108,7 +132,7 @@ async fn preflight() -> StatusCode {
 async fn read_bitable(
     req: &mut Request,
     depot: &mut Depot,
-) -> Result<Json<EncryptedResponse>, ApiError> {
+) -> Result<Json<DataResponse>, ApiError> {
     let app_token = req
         .param::<String>("app_token")
         .filter(|value| !value.trim().is_empty())
@@ -158,8 +182,17 @@ async fn read_bitable(
         }
     };
 
-    let data = state.encryptor.encrypt_json(records.as_ref())?;
-    Ok(Json(EncryptedResponse { data }))
+    let mode = depot
+        .get::<ResponseMode>(RESPONSE_MODE_KEY)
+        .copied()
+        .map_err(|_| ApiError::internal("认证状态不可用"))?;
+    let data = match mode {
+        ResponseMode::Encrypted => {
+            serde_json::Value::String(state.encryptor.encrypt_json(records.as_ref())?)
+        }
+        ResponseMode::Plaintext => records.as_ref().clone(),
+    };
+    Ok(Json(DataResponse { data }))
 }
 
 pub fn create_router(state: Arc<AppState>) -> Router {
@@ -210,6 +243,7 @@ mod tests {
         });
         let state = Arc::new(AppState::new(
             "0123456789abcdef".to_owned(),
+            "fedcba9876543210".to_owned(),
             "encrypt-secret",
             Arc::new(BitableCache::default()),
             reader,
@@ -237,6 +271,37 @@ mod tests {
             .await
             .expect("json response");
         assert!(body["data"].as_str().is_some_and(|value| !value.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn accepts_noencrypt_token_and_returns_plaintext_data() {
+        let mut response = TestClient::get("http://localhost/bitable/base-1?table=tbl-1")
+            .bearer_auth("fedcba9876543210")
+            .send(&test_service())
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        let body = response
+            .take_json::<serde_json::Value>()
+            .await
+            .expect("json response");
+        assert_eq!(
+            body["data"],
+            json!([{"app_token": "base-1", "table_id": "tbl-1"}])
+        );
+    }
+
+    #[tokio::test]
+    async fn accepts_noencrypt_token_from_auth_header() {
+        let mut response = TestClient::get("http://localhost/bitable/base-1?table=tbl-1")
+            .add_header("auth", "fedcba9876543210", true)
+            .send(&test_service())
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        let body = response
+            .take_json::<serde_json::Value>()
+            .await
+            .expect("json response");
+        assert!(body["data"].is_array());
     }
 
     #[tokio::test]

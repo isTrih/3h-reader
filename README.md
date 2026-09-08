@@ -8,6 +8,7 @@
 
 ```dotenv
 authToken=请替换为至少16字符的随机令牌
+noencrypt_authToken=请替换为另一个至少16字符的随机令牌
 encryptToken=请替换为加密密钥材料
 APP_ID=cli_xxx
 APP_KEY=xxx
@@ -44,6 +45,19 @@ curl "http://127.0.0.1:8080/bitable/US52wnvfniIRC0kAiyVcaltLnrh?table=tblQH0TVkK
 ```
 
 `data` 的二进制格式为 `nonce(12 bytes) || ciphertext || GCM tag(16 bytes)`，整体使用无填充 Base64 URL 编码。AES-256 密钥为 `SHA-256(encryptToken UTF-8 bytes)`。解密后的内容是扁平记录数组 JSON：每条记录直接以字段名为键，例如 `{"视频ID":"7675309357916572974","点赞量":28}`；飞书字段值中的 `text`、`type` 包装会被移除。
+
+使用 `noencrypt_authToken` 时，`data` 不加密，直接返回相同的扁平 JSON：
+
+```bash
+curl "http://127.0.0.1:8080/bitable/US52wnvfniIRC0kAiyVcaltLnrh?table=tblQH0TVkKNoJ2Ef" \
+  -H "Authorization: Bearer $noencrypt_authToken"
+```
+
+```json
+{"data":[{"视频ID":"7675309357916572974","点赞量":28}]}
+```
+
+`authToken` 与 `noencrypt_authToken` 都至少需要 16 个字符且不能相同。未加密 Token 拥有读取原始业务数据的能力，必须按敏感凭据管理。
 
 服务允许任意域名、方法和请求头跨域，但读取接口始终校验认证头。不要在不可信的浏览器前端代码中暴露 `authToken` 或 `encryptToken`。
 

@@ -3,6 +3,7 @@ use anyhow::{Context, Result, bail};
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub auth_token: String,
+    pub noencrypt_auth_token: String,
     pub encrypt_token: String,
     pub app_id: String,
     pub app_key: String,
@@ -16,6 +17,7 @@ impl AppConfig {
 
         let config = Self {
             auth_token: required_env("authToken")?,
+            noencrypt_auth_token: required_env("noencrypt_authToken")?,
             encrypt_token: required_env("encryptToken")?,
             app_id: required_env("APP_ID")?,
             app_key: required_env("APP_KEY")?,
@@ -26,6 +28,12 @@ impl AppConfig {
 
         if config.auth_token.len() < 16 {
             bail!("authToken 至少需要 16 个字符");
+        }
+        if config.noencrypt_auth_token.len() < 16 {
+            bail!("noencrypt_authToken 至少需要 16 个字符");
+        }
+        if config.auth_token == config.noencrypt_auth_token {
+            bail!("authToken 与 noencrypt_authToken 不能相同");
         }
         if config.encrypt_token.len() < 8 {
             bail!("encryptToken 至少需要 8 个字符");

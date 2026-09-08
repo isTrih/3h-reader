@@ -34,6 +34,7 @@ async fn main() -> Result<()> {
     let reader = Arc::new(OpenLarkReader::new(client));
     let state = Arc::new(AppState::new(
         config.auth_token,
+        config.noencrypt_auth_token,
         &config.encrypt_token,
         cache.clone(),
         reader,
